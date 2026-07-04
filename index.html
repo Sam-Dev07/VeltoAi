@@ -891,7 +891,7 @@
     container.scrollTop = container.scrollHeight;
 
     try {
-      const response = await fetch('http://localhost:5000/ask-homework', {
+      const response = await fetch('/ask-homework', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
