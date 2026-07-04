@@ -93,6 +93,3 @@ def ask_homework():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
-
-
-fix syntax error
