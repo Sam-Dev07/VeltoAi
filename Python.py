@@ -33,13 +33,12 @@ def call_gemini(model_name, user_question):
         "Content-Type": "application/json",
         "X-goog-api-key": api_key
     }
-    # FIX: Corrected payload schema for systemInstruction
     payload = {
         "contents": [
             {"parts": [{"text": user_question}]}
         ],
         "systemInstruction": {
-            "parts": [{"text": SYSTEM_INSTRUCTION.strip()}]
+            "parts": [{"text": SYSTEM_INSTRUCTION}]
         }
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -54,10 +53,10 @@ def ask_homework():
     if not user_question:
         return jsonify({"error": "Please type a question first!"}), 400
 
-    # FIX: Updated to valid Gemini API model names
+    # Model fallback chain
     models = [
-        ("gemini-1.5-flash", "Velto Standard Engine"),
-        ("gemini-2.0-flash-lite", "Velto Lite Engine")
+        ("gemini-flash-latest", "Velto Standard Engine"),
+        ("gemini-flash-lite-latest", "Velto Lite Engine")
     ]
 
     for model_name, engine_name in models:
@@ -76,7 +75,6 @@ def ask_homework():
                     continue
                 return jsonify({"error": f"Error: {error_msg}"}), 500
 
-            # Safe extraction of the text response
             answer = resp_json["candidates"][0]["content"]["parts"][0]["text"]
 
             return jsonify({
@@ -85,10 +83,7 @@ def ask_homework():
             })
 
         except Exception as e:
-            # If it's the last model failing, don't suppress the exception completely
-            if model_name == models[-1][0]:
-                return jsonify({"error": f"Error: {str(e)}"}), 500
-            continue
+            return jsonify({"error": f"Error: {str(e)}"}), 500
 
     # All models failed
     return jsonify({
@@ -98,3 +93,6 @@ def ask_homework():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
+
+fix syntax error
