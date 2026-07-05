@@ -53,10 +53,12 @@ def ask_homework():
     if not user_question:
         return jsonify({"error": "Please type a question first!"}), 400
 
-    # Model fallback chain
+    # Model fallback chain (Ordered from lowest/worse tier up to the absolute best)
     models = [
-        ("gemini-flash-latest", "Velto Standard Engine"),
-        ("gemini-flash-lite-latest", "Velto Lite Engine")
+        ("gemini-2.5-flash-lite", "Velto Lite Engine"),
+        ("gemini-2.5-flash", "Velto Standard Engine"),
+        ("gemini-3.1-flash-lite", "Velto Legacy Engine"),
+        ("gemini-3.5-flash", "Velto Apex Engine")
     ]
 
     for model_name, engine_name in models:
@@ -64,7 +66,7 @@ def ask_homework():
             resp = call_gemini(model_name, user_question)
 
             if resp.status_code == 429:
-                continue  # quota hit, try next model
+                continue  # quota or rate limit hit, skip to next model
 
             resp_json = resp.json()
 
@@ -72,7 +74,7 @@ def ask_homework():
                 error_msg = resp_json.get("error", {}).get("message", "Unknown error")
                 error_str = error_msg.lower()
                 if "quota" in error_str or "resourceexhausted" in error_str:
-                    continue
+                    continue  # skip to next model if limited
                 return jsonify({"error": f"Error: {error_msg}"}), 500
 
             answer = resp_json["candidates"][0]["content"]["parts"][0]["text"]
@@ -83,9 +85,10 @@ def ask_homework():
             })
 
         except Exception as e:
-            return jsonify({"error": f"Error: {str(e)}"}), 500
+            # If a model completely fails to connect, skip to the next one
+            continue
 
-    # All models failed
+    # All 4 models failed
     return jsonify({
         "error": "All engines are currently at capacity. Please try again later."
     }), 503
