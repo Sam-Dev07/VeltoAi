@@ -31,19 +31,30 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT,
             history TEXT,
+            user TEXT,
             created_at TEXT
         )
     ''')
     conn.commit()
+    # Ensure older DBs get the `user` column
+    cur.execute("PRAGMA table_info(chats)")
+    cols = [r[1] for r in cur.fetchall()]
+    if 'user' not in cols:
+        try:
+            cur.execute('ALTER TABLE chats ADD COLUMN user TEXT')
+            conn.commit()
+        except Exception:
+            # If ALTER fails for any reason, log and continue
+            app.logger.exception('Failed to add user column to chats table')
     conn.close()
 
-def save_chat_record(title, history):
+def save_chat_record(title, history, user=None):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         now = datetime.utcnow().isoformat() + 'Z'
-        cur.execute('INSERT INTO chats (title, history, created_at) VALUES (?, ?, ?)',
-                    (title, json.dumps(history, ensure_ascii=False), now))
+        cur.execute('INSERT INTO chats (title, history, user, created_at) VALUES (?, ?, ?, ?)',
+                    (title, json.dumps(history, ensure_ascii=False), user, now))
         conn.commit()
         chat_id = cur.lastrowid
         conn.close()
@@ -52,10 +63,13 @@ def save_chat_record(title, history):
         app.logger.exception(f"Failed to save chat: {e}")
         return None
 
-def list_chats():
+def list_chats(user=None):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, title, created_at FROM chats ORDER BY id DESC')
+    if user:
+        cur.execute('SELECT id, title, created_at, user FROM chats WHERE user = ? ORDER BY id DESC', (user,))
+    else:
+        cur.execute('SELECT id, title, created_at, user FROM chats ORDER BY id DESC')
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -154,6 +168,7 @@ def ask_homework():
     data = request.json or {}
     user_question = data.get("question", "")
     chat_history = data.get("chat_history", [])  # matches frontend's key name
+    request_user = data.get('user')
 
     if not user_question:
         return jsonify({"error": "Please type a question first!"}), 400
@@ -215,7 +230,7 @@ def ask_homework():
                 new_history = list(chat_history) if chat_history else []
                 new_history.append({"role": "velto", "text": answer, "engine": engine_name})
                 title = (user_question or (new_history[0].get('text') if new_history else 'Untitled'))[:80]
-                save_chat_record(title, new_history)
+                save_chat_record(title, new_history, user=request_user)
             except Exception:
                 app.logger.exception('Failed to auto-save chat')
 
@@ -285,7 +300,8 @@ def debug_env():
 # Chat persistence endpoints
 @app.route('/chats', methods=['GET'])
 def get_chats():
-    chats = list_chats()
+    user = request.args.get('user')
+    chats = list_chats(user=user)
     return jsonify({'chats': chats})
 
 
@@ -302,7 +318,8 @@ def post_chat():
     data = request.json or {}
     title = data.get('title') or (data.get('history', [{}])[0].get('text', '')[:80] if data.get('history') else 'Untitled')
     history = data.get('history', [])
-    chat_id = save_chat_record(title, history)
+    user = data.get('user')
+    chat_id = save_chat_record(title, history, user=user)
     if chat_id is None:
         return jsonify({'error': 'Failed to save chat'}), 500
     return jsonify({'id': chat_id})
