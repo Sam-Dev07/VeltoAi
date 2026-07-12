@@ -1107,7 +1107,7 @@
     return escapeHtml(getUserInitials(profile.name));
   }
   window.initVeltoApp = function() {
-    ensureFlaskOrigin();
+    
     chats = JSON.parse(localStorage.getItem(window.VELTO_STORAGE_KEY)) || {};
     activeChatId = localStorage.getItem(window.VELTO_ACTIVE_KEY) || null;
 
