@@ -108,23 +108,46 @@ def ask_homework():
 
     for model_name, engine_name in models:
         try:
+            app.logger.info(f"Trying model {model_name} ({engine_name})")
             resp = call_gemini(model_name, contents)
+            # Log status and a short snippet of the response for debugging
+            try:
+                resp_text = resp.text
+            except Exception:
+                resp_text = '<no-text>'
+            app.logger.info(f"Model {model_name} returned status {resp.status_code}: {resp_text[:400]}")
+
             if resp.status_code == 429:
+                app.logger.warning(f"Model {model_name} rate limited (429), trying next model")
                 continue
-            resp_json = resp.json()
+
+            # Safely parse JSON; if parsing fails, log and continue to next model
+            try:
+                resp_json = resp.json()
+            except ValueError:
+                app.logger.warning(f"Model {model_name} returned non-JSON response; skipping. Status: {resp.status_code}")
+                continue
+
             if resp.status_code != 200:
                 error_msg = resp_json.get("error", {}).get("message", "Unknown error")
-                error_str = error_msg.lower()
-                if "quota" in error_str or "resourceexhausted" in error_str:
+                error_str = (error_msg or '').lower()
+                app.logger.warning(f"Model {model_name} error: {error_msg}")
+                if "quota" in error_str or "resourceexhausted" in error_str or resp.status_code in (429, 503):
+                    # try next model when quota/capacity errors occur
                     continue
+                # For other kinds of errors, return them to client
                 if accepts_stream:
+                    payload = json.dumps({ 'error': f'Error: {error_msg}', 'model': model_name })
                     return Response(
-                        stream_with_context(iter([f"data: {json.dumps({'error': f'Error: {error_msg}'})}\n\n"])),
+                        stream_with_context(iter([f"data: {payload}\n\n"])),
                         mimetype='text/event-stream',
                         headers={'Cache-Control': 'no-cache'}
                     )
-                return jsonify({"error": f"Error: {error_msg}"}), 500
-            answer = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                return jsonify({"error": f"Error: {error_msg}", "model": model_name}), 500
+
+            # Successful response
+            answer = resp_json.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
+            app.logger.info(f"Model {model_name} succeeded; engine: {engine_name}")
             if accepts_stream:
                 return Response(
                     stream_with_context(stream_answer(answer, engine_name)),
@@ -135,7 +158,9 @@ def ask_homework():
                 "answer": answer,
                 "engine_used": engine_name
             })
-        except Exception:
+        except Exception as e:
+            app.logger.exception(f"Exception while calling model {model_name}: {e}")
+            # continue to next model
             continue
 
     if accepts_stream:
