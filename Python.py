@@ -24,34 +24,38 @@ SYSTEM_INSTRUCTION = """
     if anyone asks about how you were made tell them "I was founded by Shameek Chaturvedi, the owner of this website, i was found on 7th July 2026 as a tool for homework assistance!"
 """
 
-def build_contents(history, user_question):
+def build_contents(chat_history, user_question):
     """
-    Converts frontend history (list of {role, text}) into Gemini's
-    'contents' format, then appends the new user question at the end.
+    The frontend sends 'chat_history' as the FULL conversation so far,
+    including the just-typed user message as the last entry
+    (see sendMessage() -> chats[activeChatId].history already has it pushed
+    before the fetch call). So we just convert that array directly.
 
-    Expected history item shape from frontend:
-        {"role": "user", "text": "hello my name is sam"}
-        {"role": "assistant", "text": "Hi Sam! Nice to meet you."}
+    Frontend item shape:
+        {"role": "user",  "text": "hello my name is sam"}
+        {"role": "velto", "text": "Hi Sam! Nice to meet you.", "engine": "..."}
+
+    Fallback: if chat_history is empty/missing (e.g. old client), build
+    a single-turn conversation from 'question' instead.
     """
     contents = []
 
-    for turn in history:
-        role = turn.get("role")
-        text = turn.get("text", "")
-        if not text:
-            continue
-        # Gemini only accepts "user" or "model" as roles
-        gemini_role = "model" if role == "assistant" else "user"
+    if chat_history:
+        for turn in chat_history:
+            role = turn.get("role")
+            text = turn.get("text", "")
+            if not text:
+                continue
+            gemini_role = "model" if role == "velto" else "user"
+            contents.append({
+                "role": gemini_role,
+                "parts": [{"text": text}]
+            })
+    else:
         contents.append({
-            "role": gemini_role,
-            "parts": [{"text": text}]
+            "role": "user",
+            "parts": [{"text": user_question}]
         })
-
-    # Add the current question as the latest user turn
-    contents.append({
-        "role": "user",
-        "parts": [{"text": user_question}]
-    })
 
     return contents
 
@@ -74,14 +78,13 @@ def call_gemini(model_name, contents):
 def ask_homework():
     data = request.json or {}
     user_question = data.get("question", "")
-    history = data.get("history", [])  # <-- NEW: list of past turns from frontend
+    chat_history = data.get("chat_history", [])  # matches frontend's key name
 
     if not user_question:
         return jsonify({"error": "Please type a question first!"}), 400
 
-    contents = build_contents(history, user_question)
+    contents = build_contents(chat_history, user_question)
 
-    # Model fallback chain (Ordered from lowest/worse tier up to the absolute best)
     models = [
         ("gemini-2.5-flash-lite", "Velto Lite Engine"),
         ("gemini-2.5-flash", "Velto Standard Engine"),
@@ -93,13 +96,13 @@ def ask_homework():
         try:
             resp = call_gemini(model_name, contents)
             if resp.status_code == 429:
-                continue  # quota or rate limit hit, skip to next model
+                continue
             resp_json = resp.json()
             if resp.status_code != 200:
                 error_msg = resp_json.get("error", {}).get("message", "Unknown error")
                 error_str = error_msg.lower()
                 if "quota" in error_str or "resourceexhausted" in error_str:
-                    continue  # skip to next model if limited
+                    continue
                 return jsonify({"error": f"Error: {error_msg}"}), 500
             answer = resp_json["candidates"][0]["content"]["parts"][0]["text"]
             return jsonify({
@@ -107,10 +110,8 @@ def ask_homework():
                 "engine_used": engine_name
             })
         except Exception:
-            # If a model completely fails to connect, skip to the next one
             continue
 
-    # All 4 models failed
     return jsonify({
         "error": "All engines are currently at capacity. Please try again later."
     }), 503
