@@ -6,7 +6,10 @@ from flask import Flask, request, jsonify, send_from_directory, Response, stream
 from dotenv import load_dotenv
 from flask_cors import CORS
 
-load_dotenv(override=True)
+# Load local .env for development but do NOT override environment variables
+# provided by the hosting environment (e.g., Render). Overriding could replace
+# a valid runtime `GEMINI_API_KEY` with an empty value from a checked-in .env.
+load_dotenv()
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
@@ -199,6 +202,16 @@ def debug_gemini():
     except Exception as e:
         app.logger.exception('Debug Gemini call failed')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/debug-env', methods=['GET'])
+def debug_env():
+    """Return whether GEMINI_API_KEY is present on the running host (masked)."""
+    key = os.getenv('GEMINI_API_KEY')
+    if not key:
+        return jsonify({'has_key': False})
+    masked = ('*' * max(0, len(key) - 4)) + key[-4:]
+    return jsonify({'has_key': True, 'masked_key_end': masked})
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
