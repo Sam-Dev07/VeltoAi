@@ -1,6 +1,8 @@
+import json
 import os
+import time
 import requests
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from dotenv import load_dotenv
 from flask_cors import CORS
 
@@ -74,6 +76,17 @@ def call_gemini(model_name, contents):
     resp = requests.post(url, headers=headers, json=payload, timeout=30)
     return resp
 
+def stream_answer(answer, engine_name):
+    """Yield SSE-style chunks so the browser can render the reply progressively."""
+    chunk_size = 18
+    for index in range(0, len(answer), chunk_size):
+        chunk = answer[index:index + chunk_size]
+        payload = json.dumps({"delta": chunk})
+        yield f"data: {payload}\n\n"
+        time.sleep(0.02)
+    yield f"data: {json.dumps({'done': True, 'engine_used': engine_name})}\n\n"
+
+
 @app.route('/ask-homework', methods=['POST'])
 def ask_homework():
     data = request.json or {}
@@ -84,6 +97,7 @@ def ask_homework():
         return jsonify({"error": "Please type a question first!"}), 400
 
     contents = build_contents(chat_history, user_question)
+    accepts_stream = 'text/event-stream' in request.headers.get('Accept', '')
 
     models = [
         ("gemini-2.5-flash-lite", "Velto Lite Engine"),
@@ -103,14 +117,33 @@ def ask_homework():
                 error_str = error_msg.lower()
                 if "quota" in error_str or "resourceexhausted" in error_str:
                     continue
+                if accepts_stream:
+                    return Response(
+                        stream_with_context(iter([f"data: {json.dumps({'error': f'Error: {error_msg}'})}\n\n"])),
+                        mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache'}
+                    )
                 return jsonify({"error": f"Error: {error_msg}"}), 500
             answer = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+            if accepts_stream:
+                return Response(
+                    stream_with_context(stream_answer(answer, engine_name)),
+                    mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache'}
+                )
             return jsonify({
                 "answer": answer,
                 "engine_used": engine_name
             })
         except Exception:
             continue
+
+    if accepts_stream:
+        return Response(
+            stream_with_context(iter([f"data: {json.dumps({'error': 'All engines are currently at capacity. Please try again later.'})}\n\n"])),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache'}
+        )
 
     return jsonify({
         "error": "All engines are currently at capacity. Please try again later."
