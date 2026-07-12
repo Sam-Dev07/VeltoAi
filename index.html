@@ -1053,11 +1053,7 @@
   }
 
   function getApiBaseUrl() {
-    // Use local Flask during development or file:// loading, otherwise assume same origin backend.
-    if (location.protocol === 'file:' || location.hostname === '127.0.0.1' || location.hostname === 'localhost') {
-      return 'http://127.0.0.1:5000';
-    }
-    return '';
+    return 'http://127.0.0.1:5000';
   }
 
   function ensureFlaskOrigin() {
@@ -1111,115 +1107,18 @@
     return escapeHtml(getUserInitials(profile.name));
   }
   window.initVeltoApp = function() {
-    // origin warning removed to allow loading from other hosts during development
-    // ensureFlaskOrigin();
+    
     chats = JSON.parse(localStorage.getItem(window.VELTO_STORAGE_KEY)) || {};
     activeChatId = localStorage.getItem(window.VELTO_ACTIVE_KEY) || null;
 
     const keys = Object.keys(chats);
-    // Try to load server-side chats for logged-in users and prefer those
-    if (currentUser) {
-      fetchServerChats().then(serverLoaded => {
-        if (!serverLoaded) {
-          if (keys.length === 0) createNewChat();
-          else {
-            if (!activeChatId || !chats[activeChatId]) activeChatId = keys[0];
-            renderSidebar();
-            renderMessages();
-          }
-        }
-      }).catch(() => {
-        if (keys.length === 0) createNewChat();
-        else {
-          if (!activeChatId || !chats[activeChatId]) activeChatId = keys[0];
-          renderSidebar();
-          renderMessages();
-        }
-      });
-    } else {
-      if (keys.length === 0) createNewChat();
-      else {
-        if (!activeChatId || !chats[activeChatId]) activeChatId = keys[0];
-        renderSidebar();
-        renderMessages();
-      }
+    if (keys.length === 0) createNewChat();
+    else {
+      if (!activeChatId || !chats[activeChatId]) activeChatId = keys[0];
+      renderSidebar();
+      renderMessages();
     }
     autoResize();
-  }
-
-  // Fetch chats from server for current user and populate local state.
-  async function fetchServerChats() {
-    if (!currentUser) return false;
-    try {
-      const base = getApiBaseUrl();
-      const res = await fetch(base + '/chats?user=' + encodeURIComponent(currentUser.uid));
-      if (!res.ok) return false;
-      const data = await res.json();
-      if (!data.chats || !data.chats.length) return false;
-      // Convert server chats into local `chats` structure with stable keys
-      chats = {};
-      data.chats.forEach(c => {
-        const id = 'srv_' + c.id;
-        chats[id] = { title: c.title || ('Chat ' + c.id), history: [] , _server_id: c.id };
-      });
-      // If there is at least one chat, load the most recent fully (GET /chats/<id>)
-      const firstKey = Object.keys(chats)[0];
-      if (firstKey) {
-        const serverId = chats[firstKey]._server_id;
-        const chatRes = await fetch(base + '/chats/' + serverId);
-        if (chatRes.ok) {
-          const full = await chatRes.json();
-          chats[firstKey].history = full.history || [];
-        }
-        activeChatId = firstKey;
-        saveToStorage();
-        renderSidebar();
-        renderMessages();
-        return true;
-      }
-      return false;
-    } catch (e) {
-      console.warn('Failed to fetch server chats', e);
-      return false;
-    }
-  }
-
-  // Save a chat to server and attach _server_id to local chat
-  async function postChatToServer(localId) {
-    if (!currentUser) return null;
-    const chat = chats[localId];
-    if (!chat) return null;
-    try {
-      const base = getApiBaseUrl();
-      const res = await fetch(base + '/chats', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ title: chat.title, history: chat.history, user: currentUser.uid })
-      });
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (data.id) {
-        chat._server_id = data.id;
-        saveToStorage();
-        return data.id;
-      }
-      return null;
-    } catch (e) {
-      console.warn('Failed to post chat to server', e);
-      return null;
-    }
-  }
-
-  async function deleteChatFromServer(localId) {
-    const chat = chats[localId];
-    if (!chat || !chat._server_id) return false;
-    try {
-      const base = getApiBaseUrl();
-      const res = await fetch(base + '/chats/' + chat._server_id, { method: 'DELETE' });
-      return res.ok;
-    } catch (e) {
-      console.warn('Failed to delete chat on server', e);
-      return false;
-    }
   }
 
   function saveToStorage() {
@@ -1243,10 +1142,6 @@
 
   function deleteChat(id, event) {
     event.stopPropagation();
-    // If this chat exists on server, attempt to delete there too
-    if (chats[id] && chats[id]._server_id && currentUser) {
-      deleteChatFromServer(id).catch(() => {});
-    }
     delete chats[id];
     const keys = Object.keys(chats);
     if (activeChatId === id) activeChatId = keys.length > 0 ? keys[0] : null;
@@ -1418,8 +1313,7 @@
     activeStreamController = new AbortController();
 
     try {
-      const base = getApiBaseUrl();
-      const response = await fetch(base + '/ask-homework', {
+      const response = await fetch('http://127.0.0.1:5000/ask-homework', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1427,8 +1321,7 @@
         },
         body: JSON.stringify({
           question: text,
-          chat_history: chats[activeChatId].history,
-          user: currentUser ? currentUser.uid : undefined
+          chat_history: chats[activeChatId].history
         }),
         signal: activeStreamController.signal
       });
@@ -1510,10 +1403,6 @@
         text: streamedText || 'No response received.',
         engine: engineUsed
       });
-      // Persist this chat to server if logged in so other devices/browsers see it
-      if (currentUser) {
-        try { await postChatToServer(activeChatId); } catch (e) { /* ignore */ }
-      }
     } catch (error) {
       if (error.name === 'AbortError') {
         activeStreamController = null;
@@ -1546,4 +1435,3 @@
 </script>
 </body>
 </html>
-
