@@ -48,9 +48,6 @@ def init_db():
             app.logger.exception('Failed to add user column to chats table')
     conn.close()
 
-# Ensure the database schema is initialized before the server starts.
-init_db()
-
 def save_chat_record(title, history, user=None):
     try:
         conn = get_db_connection()
@@ -94,6 +91,8 @@ def serve_index():
     return send_from_directory('.', 'index.html')
 
 api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError("GEMINI_API_KEY not found in .env file!")
 
 SYSTEM_INSTRUCTION = """
     You are Velto AI, a helpful and friendly AI assistant.
@@ -183,18 +182,6 @@ def ask_homework():
         ("gemini-3.1-flash-lite", "Velto Legacy Engine"),
         ("gemini-3.5-flash", "Velto Apex Engine")
     ]
-
-    if not api_key:
-        error_msg = 'GEMINI_API_KEY is not configured on the server. Chat generation is disabled, but saved chats still work.'
-        app.logger.warning(error_msg)
-        if accepts_stream:
-            payload = json.dumps({'error': error_msg})
-            return Response(
-                stream_with_context(iter([f"data: {payload}\n\n"])),
-                mimetype='text/event-stream',
-                headers={'Cache-Control': 'no-cache'}
-            )
-        return jsonify({'error': error_msg}), 500
 
     for model_name, engine_name in models:
         try:
