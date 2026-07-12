@@ -174,5 +174,31 @@ def ask_homework():
         "error": "All engines are currently at capacity. Please try again later."
     }), 503
 
+
+@app.route('/debug-gemini', methods=['GET'])
+def debug_gemini():
+    """Lightweight debug endpoint to test direct calls to the Gemini endpoint from the running host.
+    Use query `?model=gemini-3.5-flash` to test a specific model. Returns status and a short body.
+    """
+    model = request.args.get('model', 'gemini-3.5-flash')
+    test_contents = [{"role": "user", "parts": [{"text": "Hello from debug check"}]}]
+    try:
+        app.logger.info(f"Debug: calling Gemini model {model}")
+        resp = call_gemini(model, test_contents)
+        text = None
+        try:
+            text = resp.text
+        except Exception:
+            text = '<no-text>'
+        result = {
+            'model': model,
+            'status': resp.status_code,
+            'body_snippet': text[:2000]
+        }
+        return jsonify(result)
+    except Exception as e:
+        app.logger.exception('Debug Gemini call failed')
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
