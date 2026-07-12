@@ -1,7 +1,9 @@
 import json
 import os
 import time
+import sqlite3
 import requests
+from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from dotenv import load_dotenv
 from flask_cors import CORS
@@ -12,6 +14,63 @@ from flask_cors import CORS
 load_dotenv()
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
+
+# Simple SQLite storage for chat persistence
+DB_FILE = os.path.join(os.path.dirname(__file__), 'chats.db')
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS chats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            history TEXT,
+            created_at TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_chat_record(title, history):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        now = datetime.utcnow().isoformat() + 'Z'
+        cur.execute('INSERT INTO chats (title, history, created_at) VALUES (?, ?, ?)',
+                    (title, json.dumps(history, ensure_ascii=False), now))
+        conn.commit()
+        chat_id = cur.lastrowid
+        conn.close()
+        return chat_id
+    except Exception as e:
+        app.logger.exception(f"Failed to save chat: {e}")
+        return None
+
+def list_chats():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, title, created_at FROM chats ORDER BY id DESC')
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def load_chat(chat_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, title, history, created_at FROM chats WHERE id = ?', (chat_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    data = dict(row)
+    data['history'] = json.loads(data['history']) if data.get('history') else []
+    return data
 
 @app.route('/')
 def serve_index():
@@ -151,6 +210,15 @@ def ask_homework():
             # Successful response
             answer = resp_json.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
             app.logger.info(f"Model {model_name} succeeded; engine: {engine_name}")
+            # Persist chat: append the assistant response to the provided chat_history and save
+            try:
+                new_history = list(chat_history) if chat_history else []
+                new_history.append({"role": "velto", "text": answer, "engine": engine_name})
+                title = (user_question or (new_history[0].get('text') if new_history else 'Untitled'))[:80]
+                save_chat_record(title, new_history)
+            except Exception:
+                app.logger.exception('Failed to auto-save chat')
+
             if accepts_stream:
                 return Response(
                     stream_with_context(stream_answer(answer, engine_name)),
@@ -212,6 +280,46 @@ def debug_env():
         return jsonify({'has_key': False})
     masked = ('*' * max(0, len(key) - 4)) + key[-4:]
     return jsonify({'has_key': True, 'masked_key_end': masked})
+
+
+# Chat persistence endpoints
+@app.route('/chats', methods=['GET'])
+def get_chats():
+    chats = list_chats()
+    return jsonify({'chats': chats})
+
+
+@app.route('/chats/<int:chat_id>', methods=['GET'])
+def get_chat(chat_id):
+    c = load_chat(chat_id)
+    if not c:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(c)
+
+
+@app.route('/chats', methods=['POST'])
+def post_chat():
+    data = request.json or {}
+    title = data.get('title') or (data.get('history', [{}])[0].get('text', '')[:80] if data.get('history') else 'Untitled')
+    history = data.get('history', [])
+    chat_id = save_chat_record(title, history)
+    if chat_id is None:
+        return jsonify({'error': 'Failed to save chat'}), 500
+    return jsonify({'id': chat_id})
+
+
+@app.route('/chats/<int:chat_id>', methods=['DELETE'])
+def delete_chat(chat_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute('DELETE FROM chats WHERE id = ?', (chat_id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'deleted': True})
+    except Exception as e:
+        app.logger.exception(f'Failed to delete chat {chat_id}: {e}')
+        return jsonify({'error': 'Failed to delete'}), 500
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
